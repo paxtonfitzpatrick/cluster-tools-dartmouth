@@ -13,31 +13,31 @@ from os.path import join as opj
 # ====== MODIFY ONLY THE CODE BETWEEN THESE LINES ======
 job_script = opj(os.path.dirname(os.path.realpath(__file__)), 'embedding_cruncher.py')
 
-embeddings_dir = opj(config['datadir'], 'embeddings')
-fig_dir = opj(config['datadir'], 'figures')
+embeddings_dir = opj(config['datadir'], 'embeddings_orig_order')
+fig_dir = opj(config['datadir'], 'figures_orig_order')
 
 job_commands = list()
 job_names = list()
 # range of possible k-values to search over (inclusive)
-np_seeds = list(range(2000))
+np_seeds = list(range(10001))
 
 rectypes = ['atlep1', 'atlep2', 'arrdev', 'delayed']
 
 for d in [embeddings_dir, fig_dir]:
     if not os.path.isdir(d):
         os.mkdir(d)
-        for rectype in rectypes:
-            if not os.path.isdir(opj(d, rectype)):
-                os.mkdir(opj(d, rectype))
+    for rectype in rectypes:
+        if not os.path.isdir(opj(d, rectype)):
+            os.mkdir(opj(d, rectype))
 
 for ns in np_seeds:
     exists = False
     for rectype in rectypes:
-        if all(os.path.isfile(opj(embeddings_dir, rectype, f'np{ns}_umap{0}.p')) for rectype in rectypes):
+        if all(os.path.isfile(opj(embeddings_dir, rectype, f'{ns}.p')) for rectype in rectypes):
             exists = True
     if not exists:
         job_commands.append(f'{job_script} {ns}')
-        job_names.append(f'optimize_embedding_numpy{ns}')
+        job_names.append(f'optimize_embedding_seed{ns}')
 
 
 # ====== MODIFY ONLY THE CODE BETWEEN THESE LINES ======

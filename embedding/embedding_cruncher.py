@@ -22,8 +22,8 @@ ep_events_dir = opj(config['datadir'], 'events', 'episodes')
 rec_events_dir = opj(config['datadir'], 'events', 'recalls')
 pickle_dir = opj(config['datadir'], 'pickles')
 
-embeddings_dir = opj(config['datadir'], 'embeddings')
-fig_dir = opj(config['datadir'], 'figures')
+embeddings_dir = opj(config['datadir'], 'embeddings_orig_order')
+fig_dir = opj(config['datadir'], 'figures_orig_order')
 
 episode_events = {ep: np.load(opj(ep_events_dir, f'{ep}_events.npy'))
                   for ep in ['atlep1', 'atlep2', 'arrdev']}
@@ -254,10 +254,7 @@ for rectype in avg_recall_events.keys():
 embeddings = {rectype: {} for rectype in recall_events.keys()}
 
 for ep in ['atlep1', 'atlep2', 'arrdev']:
-    data = [episode_events[ep], avg_recall_events[ep]]
-
-    if ep == 'atlep1':
-        data.append(avg_recall_events['delayed'])
+    data = []
 
     turkids = []
     for turkid, evs in recall_events[ep].items():
@@ -270,142 +267,151 @@ for ep in ['atlep1', 'atlep2', 'arrdev']:
             turkids_del.append(turkid)
             data.append(evs)
 
+    data.append(episode_events[ep])
+    data.append(avg_recall_events[ep])
+
+    if ep == 'atlep1':
+        data.append(avg_recall_events['delayed'])
+
+
     np.random.seed(np_seed)
     embs = hyp.reduce(data, reduce='UMAP', ndims=2)
 
-    episode = embs.pop(0)
+    if ep == 'atlep1':
+        embeddings['delayed']['avg_recall'] = embs.pop()
+
+    embeddings[ep]['avg_recall'] = embs.pop()
+    episode = embs.pop()
     embeddings[ep]['episode'] = episode
-    embeddings[ep]['avg_recall'] = embs.pop(0)
 
     if ep == 'atlep1':
         embeddings['delayed']['episode'] = episode
-        embeddings['delayed']['avg_recall'] = embs.pop(0)
 
     embeddings[ep]['recalls'] = {}
-    for turkid in turkids:
-        embeddings[ep]['recalls'][turkid] = embs.pop(0)
+    for t in turkids:
+        embeddings[ep]['recalls'][t] = embs.pop(0)
 
     embeddings[ep]['mapping'] = event_mappings[ep]
 
     if ep == 'atlep1':
         embeddings['delayed']['mapping'] = event_mappings['delayed']
         embeddings['delayed']['recalls'] = {}
-        for turkid in turkids_del:
-            embeddings['delayed']['recalls'][turkid] = embs.pop(0)
+        for t in turkids_del:
+            embeddings['delayed']['recalls'][t] = embs.pop(0)
 
 
 for rectype, embs in embeddings.items():
-    with open(opj(embeddings_dir, rectype, f'np{np_seed}_umap{0}.p'), 'wb') as f:
+    with open(opj(embeddings_dir, rectype, f'{np_seed}.p'), 'wb') as f:
         pickle.dump(embs, f)
-
-    episode = embs['episode']
-    avg_recall = embs['avg_recall']
-    recalls = embs['recalls']
-    mappings = embs['mapping']
-
-    # create 2D grid
-    scale = np.abs(episode).max()
-    step = scale / 25
-    X, Y = np.meshgrid(np.arange(-scale, scale, step), np.arange(-scale, scale, step))
-
-    # turn embedded recall event model into a list of line segments
-    seglist = []
-    for i, (turkid, sub_emb) in enumerate(recalls.items()):
-        for j in range(sub_emb.shape[0] - 1):
-            p1 = Point(coord=sub_emb[j, :])
-            p2 = Point(coord=sub_emb[j + 1, :])
-            seg = LineSegment(p1=p1, p2=p2)
-
-            seglist.append(seg)
-
-    # compute the average vector and p-value at each grid point
-    U = np.zeros_like(X)
-    V = np.zeros_like(X)
-    P = np.zeros_like(X)
-    Z = np.zeros_like(X)
-    C = np.zeros_like(X)
-    for i, (x, y) in enumerate(zip(X, Y)):
-        for j, (xi, yi) in enumerate(zip(x, y)):
-            U[i, j], V[i, j], P[i, j], C[i, j] = compute_coord(xi, yi, step * 2, seglist, kind='circle')
-
-    # multiple comparisons correction
-    thresh = .001
-    Pc = mt(P.ravel(), method='fdr_bh', alpha=.05)[1].reshape(np.shape(X))
-    M = np.hypot(U, V)
-    M = plt.cm.Blues(M)
-    M[Pc > thresh] = [.5, .5, .5, .1]
-    M[Pc == 1] = [.5, .5, .5, 0]
-
-    # create figure with subplots
-    plt.figure(figsize=(12, (len(recalls) // 8) * 2))
-    mpl.rcParams['pdf.fonttype'] = 42
-    axarr = [0 for i in range(2)]
-
-    axarr[0] = plt.subplot2grid((len(recalls) // 8 + 3, 8), (0, 1), colspan=3, rowspan=2)
-    axarr[1] = plt.subplot2grid((len(recalls) // 8 + 3, 8), (0, 4), colspan=3, rowspan=2)
-
-    for i in range(2, (len(recalls) // 8 + 3)):
-        for j in range(0, 8):
-            ax = plt.subplot2grid((len(recalls) // 8 + 3, 8), (i, j))
-            axarr.append(ax)
-
-    # plot episode trajectory and events
-    axarr[0].scatter(episode[:, 0], episode[:, 1], c=range(episode.shape[0]),
-                     cmap=cmap, s=150, zorder=3)
-    axarr[0].scatter(episode[:, 0], episode[:, 1], c='k', cmap=cmap, s=200, zorder=2)
-    axarr[0].plot(episode[:, 0], episode[:, 1], zorder=1, c='k', alpha=.5)
-    add_arrows(axarr[0], episode[:, 0], episode[:, 1], zorder=0, alpha=1, color='k', fill=True)
-    axarr[0].set_title('Episode events')
-    axarr[0].set_xlim(episode.min(0)[0] - 1, episode.max(0)[0] + 1)
-    axarr[0].set_ylim(episode.min(0)[1] - 1, episode.max(0)[1] + 1)
-    axarr[0].text(0, 1, 'A', horizontalalignment='center', transform=axarr[0].transAxes, fontsize=18)
-
-    # plot average recall events
-    axarr[1].quiver(X, Y, U, V, color=M.reshape(M.shape[0] * M.shape[1], 4), zorder=1, width=.004)
-    axarr[1].plot(avg_recall[:, 0], avg_recall[:, 1], zorder=2, c='k', alpha=1)
-    axarr[1].plot(episode[:, 0], episode[:, 1], zorder=1, c='k', alpha=.5)
-    add_arrows(axarr[1], avg_recall[:, 0], avg_recall[:, 1], zorder=3, alpha=1, color='k', fill=True)
-    axarr[1].scatter(avg_recall[:, 0], avg_recall[:, 1], c=range(avg_recall.shape[0]), cmap=cmap,
-                     s=150, zorder=4)
-    axarr[1].scatter(avg_recall[:, 0], avg_recall[:, 1], c='k', cmap=cmap, s=200, zorder=3)
-    axarr[1].set_title('Average recall events')
-    axarr[1].set_xlim(episode.min(0)[0] - 1, episode.max(0)[0] + 1)
-    axarr[1].set_ylim(episode.min(0)[1] - 1, episode.max(0)[1] + 1)
-    axarr[1].text(0, 1, 'B',
-                  horizontalalignment='center',
-                  transform=axarr[1].transAxes,
-                  fontsize=18)
-
-    # plot individual recalls
-    axarr[2].text(0, 1.05, 'C', horizontalalignment='center', transform=axarr[2].transAxes, fontsize=18)
-
-    if rectype == 'atlep1':
-        ids = id_maps['session 1']
-    elif rectype == 'delayed':
-        ids = id_maps['session 2']
-    elif rectype == 'atlep2':
-        ids = id_maps.loc[id_maps.index.str.contains('A'), 'session 2']
-    else:
-        ids = id_maps.loc[id_maps.index.str.contains('B'), 'session 2']
-
-    for i, turkid in enumerate(ids, start=2):
-        rec_emb = recalls[turkid]
-        m = mappings[np.where(mappings.T[0] == turkid)].ravel()[1]
-        axarr[i].scatter(rec_emb[:, 0], rec_emb[:, 1], c=cmap(m / len(episode)), cmap=cmap, s=60, zorder=2)
-        axarr[i].plot(rec_emb[:, 0], rec_emb[:, 1], zorder=1, c='k', alpha=.25)
-        axarr[i].plot(avg_recall[:, 0], avg_recall[:, 1], zorder=3, c='k', alpha=1)
-        add_arrows(axarr[i], rec_emb[:, 0], rec_emb[:, 1], zorder=1, alpha=.25, color='k', minifig=True, fill=True)
-        axarr[i].set_xlim(episode.min(0)[0] - 1, episode.max(0)[0] + 1)
-        axarr[i].set_ylim(episode.min(0)[1] - 1, episode.max(0)[1] + 1)
-        axarr[i].set_title(f'P{i}')
-
-    for a in axarr:
-        a.axis('off')
-
-    plt.tight_layout()
-    plt.subplots_adjust(wspace=0, hspace=0.25)
-    plt.savefig(opj(fig_dir, rectype, f'np{np_seed}_umap{0}.pdf'))
-
-
-
-
+    #
+    # episode = embs['episode']
+    # avg_recall = embs['avg_recall']
+    # recalls = embs['recalls']
+    # mappings = embs['mapping']
+    #
+    # # create 2D grid
+    # scale = np.abs(episode).max()
+    # step = scale / 25
+    # X, Y = np.meshgrid(np.arange(-scale, scale, step), np.arange(-scale, scale, step))
+    #
+    # # turn embedded recall event model into a list of line segments
+    # seglist = []
+    # for i, (turkid, sub_emb) in enumerate(recalls.items()):
+    #     for j in range(sub_emb.shape[0] - 1):
+    #         p1 = Point(coord=sub_emb[j, :])
+    #         p2 = Point(coord=sub_emb[j + 1, :])
+    #         seg = LineSegment(p1=p1, p2=p2)
+    #
+    #         seglist.append(seg)
+    #
+    # # compute the average vector and p-value at each grid point
+    # U = np.zeros_like(X)
+    # V = np.zeros_like(X)
+    # P = np.zeros_like(X)
+    # # Z = np.zeros_like(X)
+    # C = np.zeros_like(X)
+    # for i, (x, y) in enumerate(zip(X, Y)):
+    #     for j, (xi, yi) in enumerate(zip(x, y)):
+    #         U[i, j], V[i, j], P[i, j], C[i, j] = compute_coord(xi, yi, step * 2, seglist, kind='circle')
+    #
+    # # multiple comparisons correction
+    # thresh = .001
+    # Pc = mt(P.ravel(), method='fdr_bh', alpha=.05)[1].reshape(np.shape(X))
+    # M = np.hypot(U, V)
+    # M = plt.cm.Blues(M)
+    # M[Pc > thresh] = [.5, .5, .5, .1]
+    # M[Pc == 1] = [.5, .5, .5, 0]
+    #
+    # # create figure with subplots
+    # plt.figure(figsize=(12, (len(recalls) // 8) * 2))
+    # mpl.rcParams['pdf.fonttype'] = 42
+    # axarr = [0 for i in range(2)]
+    #
+    # axarr[0] = plt.subplot2grid((len(recalls) // 8 + 3, 8), (0, 1), colspan=3, rowspan=2)
+    # axarr[1] = plt.subplot2grid((len(recalls) // 8 + 3, 8), (0, 4), colspan=3, rowspan=2)
+    #
+    # for i in range(2, (len(recalls) // 8 + 3)):
+    #     for j in range(0, 8):
+    #         ax = plt.subplot2grid((len(recalls) // 8 + 3, 8), (i, j))
+    #         axarr.append(ax)
+    #
+    # # plot episode trajectory and events
+    # axarr[0].scatter(episode[:, 0], episode[:, 1], c=range(episode.shape[0]),
+    #                  cmap=cmap, s=150, zorder=3)
+    # axarr[0].scatter(episode[:, 0], episode[:, 1], c='k', cmap=cmap, s=200, zorder=2)
+    # axarr[0].plot(episode[:, 0], episode[:, 1], zorder=1, c='k', alpha=.5)
+    # add_arrows(axarr[0], episode[:, 0], episode[:, 1], zorder=0, alpha=1, color='k', fill=True)
+    # axarr[0].set_title('Episode events')
+    # axarr[0].set_xlim(episode.min(0)[0] - 1, episode.max(0)[0] + 1)
+    # axarr[0].set_ylim(episode.min(0)[1] - 1, episode.max(0)[1] + 1)
+    # axarr[0].text(0, 1, 'A', horizontalalignment='center', transform=axarr[0].transAxes, fontsize=18)
+    #
+    # # plot average recall events
+    # axarr[1].quiver(X, Y, U, V, color=M.reshape(M.shape[0] * M.shape[1], 4), zorder=1, width=.004)
+    # axarr[1].plot(avg_recall[:, 0], avg_recall[:, 1], zorder=2, c='k', alpha=1)
+    # axarr[1].plot(episode[:, 0], episode[:, 1], zorder=1, c='k', alpha=.5)
+    # add_arrows(axarr[1], avg_recall[:, 0], avg_recall[:, 1], zorder=3, alpha=1, color='k', fill=True)
+    # axarr[1].scatter(avg_recall[:, 0], avg_recall[:, 1], c=range(avg_recall.shape[0]), cmap=cmap,
+    #                  s=150, zorder=4)
+    # axarr[1].scatter(avg_recall[:, 0], avg_recall[:, 1], c='k', cmap=cmap, s=200, zorder=3)
+    # axarr[1].set_title('Average recall events')
+    # axarr[1].set_xlim(episode.min(0)[0] - 1, episode.max(0)[0] + 1)
+    # axarr[1].set_ylim(episode.min(0)[1] - 1, episode.max(0)[1] + 1)
+    # axarr[1].text(0, 1, 'B',
+    #               horizontalalignment='center',
+    #               transform=axarr[1].transAxes,
+    #               fontsize=18)
+    #
+    # # plot individual recalls
+    # axarr[2].text(0, 1.05, 'C', horizontalalignment='center', transform=axarr[2].transAxes, fontsize=18)
+    #
+    # if rectype == 'atlep1':
+    #     ids = id_maps['session 1']
+    # elif rectype == 'delayed':
+    #     ids = id_maps['session 2']
+    # elif rectype == 'atlep2':
+    #     ids = id_maps.loc[id_maps.index.str.contains('A'), 'session 2']
+    # else:
+    #     ids = id_maps.loc[id_maps.index.str.contains('B'), 'session 2']
+    #
+    # for i, turkid in enumerate(ids, start=2):
+    #     rec_emb = recalls[turkid]
+    #     m = mappings[np.where(mappings.T[0] == turkid)].ravel()[1]
+    #     axarr[i].scatter(rec_emb[:, 0], rec_emb[:, 1], c=cmap(m / len(episode)), cmap=cmap, s=60, zorder=2)
+    #     axarr[i].plot(rec_emb[:, 0], rec_emb[:, 1], zorder=1, c='k', alpha=.25)
+    #     axarr[i].plot(avg_recall[:, 0], avg_recall[:, 1], zorder=3, c='k', alpha=1)
+    #     add_arrows(axarr[i], rec_emb[:, 0], rec_emb[:, 1], zorder=1, alpha=.25, color='k', minifig=True, fill=True)
+    #     axarr[i].set_xlim(episode.min(0)[0] - 1, episode.max(0)[0] + 1)
+    #     axarr[i].set_ylim(episode.min(0)[1] - 1, episode.max(0)[1] + 1)
+    #     axarr[i].set_title(f'P{i}')
+    #
+    # for a in axarr:
+    #     a.axis('off')
+    #
+    # plt.tight_layout()
+    # plt.subplots_adjust(wspace=0, hspace=0.25)
+    # plt.savefig(opj(fig_dir, rectype, f'{np_seed}.pdf'))
+    #
+    #
+    #
+    #
